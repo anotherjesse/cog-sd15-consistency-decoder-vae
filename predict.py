@@ -124,7 +124,9 @@ class Predictor(BasePredictor):
             if consistency_decoder:
                 print("Running consistency decoder...")
                 start = time.time()
-                sample = self.consistency_decoder(sample.unsqueeze(0))
+                sample = self.consistency_decoder(
+                    sample.unsqueeze(0) / self.pipe.vae.config.scaling_factor
+                )
                 print("Consistency decoder took", time.time() - start, "seconds")
                 save_image(sample, output_path)
             else:
