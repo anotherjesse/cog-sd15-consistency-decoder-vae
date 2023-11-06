@@ -1,8 +1,10 @@
 import os
+import time
 from typing import List
 
 import torch
 from cog import BasePredictor, Input, Path
+from consistencydecoder import ConsistencyDecoder, save_image
 from diffusers import (
     StableDiffusionPipeline,
     PNDMScheduler,
@@ -12,31 +14,25 @@ from diffusers import (
     EulerAncestralDiscreteScheduler,
     DPMSolverMultistepScheduler,
 )
-from diffusers.pipelines.stable_diffusion.safety_checker import (
-    StableDiffusionSafetyChecker,
-)
 
-# MODEL_ID refers to a diffusers-compatible model on HuggingFace
-# e.g. prompthero/openjourney-v2, wavymulder/Analog-Diffusion, etc
-MODEL_ID = "stabilityai/stable-diffusion-2-1"
+MODEL_ID = "runwayml/stable-diffusion-v1-5"
 MODEL_CACHE = "diffusers-cache"
-SAFETY_MODEL_ID = "CompVis/stable-diffusion-safety-checker"
+
 
 class Predictor(BasePredictor):
     def setup(self):
         """Load the model into memory to make running multiple predictions efficient"""
         print("Loading pipeline...")
-        safety_checker = StableDiffusionSafetyChecker.from_pretrained(
-            SAFETY_MODEL_ID,
-            cache_dir=MODEL_CACHE,
-            local_files_only=True,
-        )
         self.pipe = StableDiffusionPipeline.from_pretrained(
-            MODEL_ID,
-            safety_checker=safety_checker,
-            cache_dir=MODEL_CACHE,
+            MODEL_CACHE,
             local_files_only=True,
+            torch_dtype=torch.float16,
         ).to("cuda")
+
+        print("Loading ConsistencyDecoder...")
+        self.consistency_decoder = ConsistencyDecoder(
+            device="cuda:0", download_root="/src/consistencydecoder-cache"
+        )
 
     @torch.inference_mode()
     def predict(
@@ -48,6 +44,10 @@ class Predictor(BasePredictor):
         negative_prompt: str = Input(
             description="Specify things to not see in the output",
             default=None,
+        ),
+        consistency_decoder: bool = Input(
+            description="Enable consistency decoder",
+            default=True,
         ),
         width: int = Input(
             description="Width of output image. Maximum size is 1024x768 or 768x1024 because of memory limits",
@@ -100,6 +100,7 @@ class Predictor(BasePredictor):
         self.pipe.scheduler = make_scheduler(scheduler, self.pipe.scheduler.config)
 
         generator = torch.Generator("cuda").manual_seed(seed)
+        start = time.time()
         output = self.pipe(
             prompt=[prompt] * num_outputs if prompt is not None else None,
             negative_prompt=[negative_prompt] * num_outputs
@@ -110,7 +111,9 @@ class Predictor(BasePredictor):
             guidance_scale=guidance_scale,
             generator=generator,
             num_inference_steps=num_inference_steps,
+            output_type="latent" if consistency_decoder else None,
         )
+        print("Inference took", time.time() - start, "seconds")
 
         output_paths = []
         for i, sample in enumerate(output.images):
@@ -118,7 +121,14 @@ class Predictor(BasePredictor):
                 continue
 
             output_path = f"/tmp/out-{i}.png"
-            sample.save(output_path)
+            if consistency_decoder:
+                print("Running consistency decoder...")
+                start = time.time()
+                sample = self.consistency_decoder(sample.unsqueeze(0))
+                print("Consistency decoder took", time.time() - start, "seconds")
+                save_image(sample, output_path)
+            else:
+                sample.save(output_path)
             output_paths.append(Path(output_path))
 
         if len(output_paths) == 0:
