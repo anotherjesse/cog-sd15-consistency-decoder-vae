@@ -4,9 +4,9 @@ from typing import List
 
 import torch
 from cog import BasePredictor, Input, Path
-from consistencydecoder import ConsistencyDecoder, save_image
 from diffusers import (
-    StableDiffusionPipeline,
+    DiffusionPipeline,
+    ConsistencyDecoderVAE,
     PNDMScheduler,
     LMSDiscreteScheduler,
     DDIMScheduler,
@@ -14,25 +14,39 @@ from diffusers import (
     EulerAncestralDiscreteScheduler,
     DPMSolverMultistepScheduler,
 )
+from weights_downloader import WeightsDownloader
 
-MODEL_ID = "runwayml/stable-diffusion-v1-5"
 MODEL_CACHE = "diffusers-cache"
 
+SD_MODEL_CACHE = os.path.join(MODEL_CACHE, "models--runwayml--stable-diffusion-v1-5")
+MODEL_ID = "runwayml/stable-diffusion-v1-5"
+SD_URL = "https://weights.replicate.delivery/default/stable-diffusion/stable-diffusion-v1-5-fp16.tar"
+
+DECODER_CACHE = os.path.join(MODEL_CACHE, "models--openai--consistency-decoder")
+DECODER_ID = "openai/consistency-decoder"
+DECODER_URL = "https://weights.replicate.delivery/default/stable-diffusion/openai-consistency-decoder.tar"
 
 class Predictor(BasePredictor):
     def setup(self):
         """Load the model into memory to make running multiple predictions efficient"""
-        print("Loading pipeline...")
-        self.pipe = StableDiffusionPipeline.from_pretrained(
-            MODEL_CACHE,
+        print("Loading ConsistencyDecoder...")
+        WeightsDownloader.download_if_not_exists(DECODER_URL, DECODER_CACHE)
+        # for some reason, we actually need to point to the snapshot, not the base cache dir
+        self.vae = ConsistencyDecoderVAE.from_pretrained(
+            os.path.join(DECODER_CACHE, 'snapshots/63b7a48896d92b6f56772f4111d0860b1bee3dd3'),
             local_files_only=True,
-            torch_dtype=torch.float16,
+            cache_dir=MODEL_CACHE,
+        )
+
+        print("Loading pipeline...")
+        WeightsDownloader.download_if_not_exists(SD_URL, SD_MODEL_CACHE)
+        self.pipe = DiffusionPipeline.from_pretrained(
+            SD_MODEL_CACHE,
+            vae=self.vae,
+            local_files_only=True,
+            cache_dir=MODEL_CACHE
         ).to("cuda")
 
-        print("Loading ConsistencyDecoder...")
-        self.consistency_decoder = ConsistencyDecoder(
-            device="cuda:0", download_root="/src/consistencydecoder-cache"
-        )
 
     @torch.inference_mode()
     def predict(
@@ -44,10 +58,6 @@ class Predictor(BasePredictor):
         negative_prompt: str = Input(
             description="Specify things to not see in the output",
             default=None,
-        ),
-        consistency_decoder: bool = Input(
-            description="Enable consistency decoder",
-            default=True,
         ),
         width: int = Input(
             description="Width of output image. Maximum size is 1024x768 or 768x1024 because of memory limits",
@@ -111,7 +121,6 @@ class Predictor(BasePredictor):
             guidance_scale=guidance_scale,
             generator=generator,
             num_inference_steps=num_inference_steps,
-            output_type="latent" if consistency_decoder else None,
         )
         print("Inference took", time.time() - start, "seconds")
 
@@ -121,16 +130,7 @@ class Predictor(BasePredictor):
                 continue
 
             output_path = f"/tmp/out-{i}.png"
-            if consistency_decoder:
-                print("Running consistency decoder...")
-                start = time.time()
-                sample = self.consistency_decoder(
-                    sample.unsqueeze(0) / self.pipe.vae.config.scaling_factor
-                )
-                print("Consistency decoder took", time.time() - start, "seconds")
-                save_image(sample, output_path)
-            else:
-                sample.save(output_path)
+            sample.save(output_path)
             output_paths.append(Path(output_path))
 
         if len(output_paths) == 0:
