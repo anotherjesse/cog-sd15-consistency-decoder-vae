@@ -5,15 +5,16 @@ from typing import List
 import torch
 from cog import BasePredictor, Input, Path
 from diffusers import (
-    DiffusionPipeline,
     ConsistencyDecoderVAE,
-    PNDMScheduler,
-    LMSDiscreteScheduler,
     DDIMScheduler,
-    EulerDiscreteScheduler,
-    EulerAncestralDiscreteScheduler,
+    DiffusionPipeline,
     DPMSolverMultistepScheduler,
+    EulerAncestralDiscreteScheduler,
+    EulerDiscreteScheduler,
+    LMSDiscreteScheduler,
+    PNDMScheduler,
 )
+
 from weights_downloader import WeightsDownloader
 
 MODEL_CACHE = "diffusers-cache"
@@ -26,6 +27,7 @@ DECODER_CACHE = os.path.join(MODEL_CACHE, "models--openai--consistency-decoder")
 DECODER_ID = "openai/consistency-decoder"
 DECODER_URL = "https://weights.replicate.delivery/default/stable-diffusion/openai-consistency-decoder.tar"
 
+
 class Predictor(BasePredictor):
     def setup(self):
         """Load the model into memory to make running multiple predictions efficient"""
@@ -33,7 +35,9 @@ class Predictor(BasePredictor):
         WeightsDownloader.download_if_not_exists(DECODER_URL, DECODER_CACHE)
         # for some reason, we actually need to point to the snapshot, not the base cache dir
         self.vae = ConsistencyDecoderVAE.from_pretrained(
-            os.path.join(DECODER_CACHE, 'snapshots/63b7a48896d92b6f56772f4111d0860b1bee3dd3'),
+            os.path.join(
+                DECODER_CACHE, "snapshots/63b7a48896d92b6f56772f4111d0860b1bee3dd3"
+            ),
             local_files_only=True,
             cache_dir=MODEL_CACHE,
         )
@@ -41,12 +45,8 @@ class Predictor(BasePredictor):
         print("Loading pipeline...")
         WeightsDownloader.download_if_not_exists(SD_URL, SD_MODEL_CACHE)
         self.pipe = DiffusionPipeline.from_pretrained(
-            SD_MODEL_CACHE,
-            vae=self.vae,
-            local_files_only=True,
-            cache_dir=MODEL_CACHE
+            SD_MODEL_CACHE, vae=self.vae, local_files_only=True, cache_dir=MODEL_CACHE
         ).to("cuda")
-
 
     @torch.inference_mode()
     def predict(
