@@ -20,7 +20,7 @@ from weights_downloader import WeightsDownloader
 MODEL_CACHE = "diffusers-cache"
 
 SD_MODEL_CACHE = os.path.join(MODEL_CACHE, "models--runwayml--stable-diffusion-v1-5")
-MODEL_ID = "runwayml/stable-diffusion-v1-5"
+SD_MODEL_ID = "runwayml/stable-diffusion-v1-5"
 SD_URL = "https://weights.replicate.delivery/default/stable-diffusion/stable-diffusion-v1-5-fp16.tar"
 
 DECODER_CACHE = os.path.join(MODEL_CACHE, "models--openai--consistency-decoder")
@@ -33,10 +33,9 @@ class Predictor(BasePredictor):
         """Load the model into memory to make running multiple predictions efficient"""
         print("Loading ConsistencyDecoder...")
         WeightsDownloader.download_if_not_exists(DECODER_URL, DECODER_CACHE)
-        # for some reason, we actually need to point to the snapshot, not the base cache dir
         self.vae = ConsistencyDecoderVAE.from_pretrained(
             os.path.join(
-                DECODER_CACHE, "snapshots/63b7a48896d92b6f56772f4111d0860b1bee3dd3"
+                DECODER_ID,
             ),
             local_files_only=True,
             cache_dir=MODEL_CACHE,
